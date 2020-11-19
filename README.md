@@ -1,1 +1,2 @@
-# Endolith_metagenome_pipeline
+# Metagenome_pipeline
+#Binning using MetaBat and Concoct
