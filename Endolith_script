@@ -1,0 +1,45 @@
+#unzip fastq files 
+gunzip endolith_S2_L001_R*
+
+#run FastQC on original samples - save files in FastQC folder 
+fastqc filename 
+
+#normalize k-mers using bbnorm
+bbnorm.sh in1=endolith_S2_L001_R1_001.fastq in2=endolith_S2_L001_R2_001.fastq out1=endolith_R1_norm.fastq out2=endolith_R2_norm.fastq target=30 min=3 kmer=21
+
+#run FastQC on normalized samples - save files in FastQC folder 
+fastqc filename 
+
+# Trim sequences for quality 
+trimmomatic PE endolith_R1_norm.fastq endolith_R2_norm.fastq Endolith_FP.fastq Endolith__FU.fastq Endolith_RP.fastq Endolith_RU.fastq LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
+
+# Assemble reads using SPAdes (creates contigs)
+spades.py --meta --pe1-1 Endolith_FP.fastq --pe1-2 Endolith_RP.fastq -o ./SPADES
+
+#Map with contigs - work in contigs_path directory 
+# Map the reads back to the assembly 
+bbmap.sh in1=Endolith_FP.fastq in2=Endolith_RP.fastq ref=./SPADES/contigs.fasta out=endolith_mapped.sam covstats=constats.txt basecov=basecov.txt bincov=bincov.txt 
+
+#convert sam to bam 
+samtools view -bS endolith_mapped.sam > endolith_mapped.bam
+#sort sam and index 
+samtools sort endolith_mapped.bam > endolith_mapped_sort.bam
+samtools index endolith_mapped_sort.bam 
+
+#Bin with MetaBat 
+runMetaBat.sh --unbinned -v -m 1500 ../../SPADES/contigs.fasta ../endolith_mapped_sort.bam > metabatALLlog.txt
+
+#Bin with Concoct (need to be in concoct conda environment) - following Basic usage method for concoct 
+cut_up_fasta.py ../../SPADES/contigs.fasta -c 10000 -o 0 --merge_last -b contigs_10K.bed > contigs_10K.fasta
+concoct_coverage_table.py contigs_10K.bed ../endolith_mapped_sort.bam > coverage_table.tsv
+concoct --composition_file contigs_10K.fasta --coverage_file coverage_table.tsv -b concoct_output/
+merge_cutup_clustering.py concoct_output/clustering_gt1000.csv > concoct_output/clustering_merged.csv
+extract_fasta_bins.py ../../SPADES/contigs.fasta concoct_output/clustering_merged.csv --output_path concoct_output/fasta_bins/
+
+#run Checkm on MetaBat bins 
+checkm lineage_wf -x fa contigs.fasta.metabat-bins1500-20201116_142605/ ./checkm
+checkm qa ./lineage.ms . -f qa_out_endolith_metabatbins.txt
+
+#run checkm on Concoct bins 
+checkm lineage_wf -x fa fasta_bins/ ./checkm
+checkm qa ./lineage.ms . -f qa_out_endolith_concoctbins.txt
