@@ -1,0 +1,74 @@
+# Unzip the files 
+gunzip permafrost_S1_L001_R1_001.fastq.gz 
+gunzip permafrost_S1_L001_R2_001.fastq.gz 
+
+# Normalize k-mers using bbnorm - working in conda environment bbmap
+bbnorm.sh in1=permafrost_S1_L001_R1_001.fastq in2=permafrost_S1_L001_R2_001.fastq out1=permafrost_S1_L001_R1_001_norm.fastq out2=permafrost_S1_L001_R2_001_norm.fastq target=30 min=3 kmer=21
+
+#trim sequences for quality - in UV_Data conda environment 
+trimmomatic PE permafrost_S1_L001_R1_001_norm.fastq permafrost_S1_L001_R2_001_norm.fastq permafrost_FP.fastq permafrost_FU.fastq permafrost_RP.fastq permafrost_RU.fastq LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
+
+#run FastQC on all steps at once - just if you want to look at your data and see what normalization and trimming has done 
+fastqc permafrost*
+#move files to FastQC directory
+mv *fastqc* FastQC/
+
+# Assemble reads using SPAdes (creates contigs) - outputs to new directory called SPADES
+spades.py --meta --pe1-1 permafrost_FP.fastq --pe1-2 permafrost_RP.fastq -o ./SPADES
+
+#map reads to the assembly - in contigs_path directory (in case we re-run with scaffolds instead later) - conda environment bbmap
+bbmap.sh in1=../permafrost_FP.fastq in2=../permafrost_RP.fastq ref=../SPADES/contigs.fasta out=permafrost_mapped.sam covstats=covstats.txt basecov=basecov.txt bincov=bincov.txt  
+
+#convert sam to bam - UV_Data conda environment
+samtools view -bS permafrost_mapped.sam > permafrost_mapped.bam
+#sort sam and index 
+samtools sort permafrost_mapped.bam > permafrost_mapped_sort.bam
+samtools index permafrost_mapped_sort.bam 
+
+# Now that we have our bam file and fasta files it is time to bin - did this with two different binners - MetaBat and Concoct 
+
+#Bin with MetaBat 
+runMetaBat.sh --unbinned -v -m 1500 ../../SPADES/contigs.fasta ../permafrost_mapped_sort.bam > metabatALLlog.txt
+
+#run checkm for Metabat bins 
+checkm lineage_wf -x fa Bins/ Bins/checkm
+#output qa table to a file 
+checkm qa ./lineage.ms . -f qa_out_permafrost_concoctbins.txt
+#output marker genes to a fasta file 
+checkm qa -o 9 ./lineage.ms . -f markergenes_permafrost_metabat.fasta
+# break the markergenes_permafrost_metabat.fasta up into individual marker gene files for each bin
+# use grep to do this, print matches and the following line (-A 1) to new files 
+grep -A 1 ">bin.1" markergenes_permafrost_metabat.fasta
+ > bin1_markergenes_PMeta.fasta
+grep -A 1 ">bin.2" markergenes_permafrost_metabat.fasta
+ > bin2_markergenes_PMeta.fasta
+grep -A 1 ">bin.3" markergenes_permafrost_metabat.fasta
+ > bin3_markergenes_PMeta.fasta
+
+#BLAST marker gene fasta files to see if the marker genes are identified
+#Use BLAST website - protein BLAST - only 3 bins so its pretty fast, would be better to figure out command line option for more bins 
+
+#Bin with Concoct 
+#Option2 Binning with CONCOCT - MetaBat is biased towards prokaryotes. In order to use EukCC to try and identify eukaryotic bins we need to use an unbiased binner. 
+# Following Basic Usage method from concoct 
+# cut up any large contigs into smaller pieces 
+cut_up_fasta.py ../../SPADES/contigs.fasta -c 10000 -o 0 --merge_last -b contigs_10K.bed > contigs_10K.fasta
+# generate a table with coverage depth - need the bam files to be sorted and indexed if they aren't already 
+concoct_coverage_table.py contigs_10K.bed ../permafrost_mapped_sort.bam > coverage_table.tsv
+#Run concoct 
+concoct --composition_file contigs_10K.fasta --coverage_file coverage_table.tsv
+#Merge subcontig clustering into original contig clustering 
+merge_cutup_clustering.py clustering_gt1000.csv > clustering_merged.csv
+#Extract bins as individual FASTA
+mkdir fasta_bins
+extract_fasta_bins.py ../../SPADES/contigs.fasta ./clustering_merged.csv --output_path ./fasta_bins/
+
+#run checkm for Concoct bins 
+checkm lineage_wf -x fa fasta_bins/ ./checkm
+#output chackm qa summary table to a file 
+checkm qa ./lineage.ms . -f qa_out_permafrost_metabatbins.txt
+
+#run EukRep to filter for bins with Eukaryotic sequences
+filter_euk_bins.py fasta_bins/*.fa --output euk_rep_table.tsv
+#if you want to sort the output and make it table delimited so that it is easier to read 
+cat euk_rep_table.tsv | sed 's/,/\t/g' | awk 'NR<2{print$0;next}{print$0 | "sort -k2 -n"}' > euk_rep_table_sorted.tsv
