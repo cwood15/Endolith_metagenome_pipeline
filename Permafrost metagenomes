@@ -68,7 +68,7 @@ checkm lineage_wf -x fa fasta_bins/ ./checkm
 #output chackm qa summary table to a file 
 checkm qa ./lineage.ms . -f qa_out_permafrost_metabatbins.txt
 
-#run EukRep to filter for bins with Eukaryotic sequences
+#run EukCC to filter for bins with Eukaryotic sequences
 filter_euk_bins.py fasta_bins/*.fa --output euk_rep_table.tsv
 #if you want to sort the output and make it table delimited so that it is easier to read 
 cat euk_rep_table.tsv | sed 's/,/\t/g' | awk 'NR<2{print$0;next}{print$0 | "sort -k2 -n"}' > euk_rep_table_sorted.tsv
